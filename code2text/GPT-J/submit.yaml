@@ -1,0 +1,353 @@
+description: run on ms-shared
+
+target:
+  service: amlk8s
+  # run "amlt target list amlk8s" to list the names of available AMLK8s targets
+  # TARGET_NAME       SERVICE    CLUSTER           VC        WORKSPACE_NAME    RESOURCE_GROUP    METADATA
+  # ----------------  ---------  ----------------  --------  ----------------  ----------------  --------------------------------------------------
+  # itpeastusv100cl2  amlk8s     itpeastusv100cl2  resrchvc  resrchvc-eus      researchvc-eus    card: V100, gpus_per_vm: 4, ib: yes, gpu_mem: 16GB
+  # itpeusp100cl      amlk8s     itpeusp100cl      resrchvc  resrchvc-eus      researchvc-eus    card: P100, gpus_per_vm: 4, ib: yes, gpu_mem: 16GB
+  # itpwus2cpucl1     amlk8s     itpwus2cpucl1     gcrcpu    gcrcpu            gcrcpu-wus2       card: CPU, gpus_per_vm: 0, ib: no, gpu_mem: 128GB
+  # itpseasiav100cl   amlk8s     itpseasiav100cl   resrchvc  resrchvc-sea      researchvc-sea    card: V100, gpus_per_vm: 8, ib: no, gpu_mem: 16GB
+  # itplabrr1cl1      amlk8s     itplabrr1cl1      resrchvc  resrchvc          researchvc        card: V100, gpus_per_vm: 8, ib: yes, gpu_mem: 32GB
+  # itpwus2v100cl     amlk8s     itpwus2v100cl     resrchvc  resrchvc          researchvc        card: V100, gpus_per_vm: 8, ib: yes, gpu_mem: 32GB
+  # itpeusp40cl       amlk8s     itpeusp40cl       resrchvc  resrchvc-eus      researchvc-eus    card: P40, gpus_per_vm: 4, ib: no, gpu_mem: 24GB
+  # itpscusv100cl     amlk8s     itpscusv100cl     resrchvc  resrchvc-sc       researchvc-sc     card: V100, gpus_per_vm: 8, ib: no, gpu_mem: 16GB
+  # itplabrl1cl1      amlk8s     itplabrl1cl1      resrchvc  resrchvc          researchvc        card: P100, gpus_per_vm: 1, ib: yes, gpu_mem: 16GB
+  # itpeastusv100cl   amlk8s     itpeastusv100cl   resrchvc  resrchvc-eus      researchvc-eus    card: V100, gpus_per_vm: 8, ib: no, gpu_mem: 16GB
+  # name: itpeastusv100cl2
+  # name: itpeusp100cl
+  # name: itphyperdgx2cl1
+  # vc: hai6
+  name: ms-shared
+
+environment:
+  # image: publicrepository/bert:pytorch_1.4_nccl_2.7.8_horovod_0.19.5_transformers_0.5.0_ib
+  # image: deepspeed/deepspeed:latest-torch170-cuda110
+  image: pytorch/pytorch:1.7.1-cuda11.0-cudnn8-devel
+  registry: docker.io # any public registry can be specified here
+  # image: my_azureml-pytorch-1.7-ubuntu18.04-py37-cuda11-gpu:latest
+  # registry: hai6cr.azurecr.io
+  # username: hai6cr
+  setup:
+    - pip install -r requirements.txt
+
+code:
+  # local directory of the code. this will be uploaded to the server.
+  # $CONFIG_DIR is expanded to the directory of this config file
+  local_dir: $CONFIG_DIR/
+
+data:
+  # You need to run "python src/download_data.py" beforehand
+  # to generate the dataset to be uploaded
+  # don't forget to run with --upload-data
+  local_dir: $CONFIG_DIR/data/
+
+  # The data will be uploaded to your default storage.
+  #   Check ``multi_storage.yaml'' for more flexibility.
+  remote_dir: data/
+
+# storage:
+#   shared_data:
+#     storage_account_name: haotian
+#     container_name: home
+#     mount_dir: /mnt/shared_data
+
+# list of jobs to run
+# avalaible sku options: ['G0', 'G1', 'G2', 'G4', 'G8', 'G16',
+# '16G1', '16G4', '16G8', '24G1', '24G2', '24G4', '24G8',
+# '32G4', '32G8', '32G16', '64G4', '40G8']
+jobs:
+  - name: stage1_finetune
+    sku: 32G4
+    command:
+      - bash finetune-gpt-neo_cli.sh 4
+  - name: stage1_finetune_gpt2
+    sku: 32G4
+    command:
+      - bash finetune-gpt-neo_cli.sh -j ft-stage1-gpt2 -m gpt2 4
+  - name: stage1_finetune_G16
+    sku: 32G16
+    command:
+      - bash finetune-gpt-neo_cli.sh 16
+  - name: stage2_finetune
+    sku: 32G4
+    command:
+      - bash finetune-stage2-gpt-neo_cli.sh 4
+  - name: step2_annotate_data
+    sku: 32G4
+    command:
+      - python make_step2_filter_with_ml_annotator.py
+  - name: stage2_finetune_gpt-neo
+    sku: 32G4
+    command:
+      - >
+        bash finetune-gpt-neo_cli.sh -j ft-stage2-gpt-neo 
+        -m "/mnt/default/ft-stage1-gpt-neo-GithubCodeDoc-Jan16-16-49-2022/checkpoint-80000" 4
+  - name: stage1_finetune_gpt-j_bs$BLOCK
+    sku: 32G8
+    command:
+      - >
+        bash finetune-gpt-neo_cli.sh -j ft-stage1-gpt-j
+        -m "EleutherAI/gpt-j-6B" -s $BLOCK 8
+    # jobs for evaluaiton on test data
+  - name: eval_v1_ft12_gpt2
+    sku: G1
+    command:
+      - >
+        python eval-gpt-neo.py 
+        --model-path /mnt/default/ft-stage2-gpt2-GithubCodeDocStep1n2Filtered-Jan21-13-24-2022/checkpoint-14750 
+        --data-path /mnt/default/data/GithubCodeDocStep1n2Filtered.test.jsonl 
+        --save-dir /mnt/default/eval_results/on_3k_testset/
+        --max-new-token 256
+        --batch-size 32
+  - name: eval_v1_ft1_gpt2
+    sku: G1
+    command:
+      - >
+        python eval-gpt-neo.py 
+        --model-path /mnt/default/ft-stage1-gpt2-GithubCodeDoc-Jan21-07-58-2022/checkpoint-157500 
+        --data-path /mnt/default/data/GithubCodeDocStep1n2Filtered.test.jsonl 
+        --save-dir /mnt/default/eval_results/on_3k_testset/
+        --max-new-token 256
+        --batch-size 32
+  - name: eval_v1_ft2_gpt2
+    sku: G1
+    command:
+      - >
+        python eval-gpt-neo.py 
+        --model-path /mnt/default/ft-stage1-gpt2-GithubCodeDocStep1n2Filtered-Jan21-00-31-2022/checkpoint-14750 
+        --data-path /mnt/default/data/GithubCodeDocStep1n2Filtered.test.jsonl 
+        --save-dir /mnt/default/eval_results/on_3k_testset/
+        --max-new-token 256
+        --batch-size 32
+  - name: eval_v1_gpt-neo
+    sku: 32G4
+    command:
+      - >
+        python eval-gpt-neo.py
+        --model-path EleutherAI/gpt-neo-1.3B
+        --data-path /mnt/default/data/GithubCodeDocStep1n2Filtered.test.jsonl 
+        --save-dir /mnt/default/eval_results/on_3k_testset/
+        --max-new-token 512 
+        --batch-size 6
+  - name: eval_v1_ft1_gpt-neo
+    sku: 32G4
+    command:
+      - >
+        python eval-gpt-neo.py
+        --model-path /mnt/default/ft-stage1-gpt-neo-GithubCodeDoc-Jan16-16-49-2022/checkpoint-80000
+        --data-path /mnt/default/data/GithubCodeDocStep1n2Filtered.test.jsonl 
+        --save-dir /mnt/default/eval_results/on_3k_testset/
+        --max-new-token 512 
+        --batch-size 6
+  - name: eval_v1_ft2_gpt-neo
+    sku: 32G4
+    command:
+      - >
+        python eval-gpt-neo.py
+        --model-path /mnt/default/ft-stage1-gpt-neo-GithubCodeDocStep1n2Filtered-Jan20-07-50-2022/checkpoint-4750
+        --data-path /mnt/default/data/GithubCodeDocStep1n2Filtered.test.jsonl 
+        --save-dir /mnt/default/eval_results/on_3k_testset/
+        --max-new-token 512
+        --batch-size 6
+  - name: eval_v1_ft12_gpt-neo
+    sku: 32G4
+    command:
+      - >
+        python eval-gpt-neo.py
+        --model-path /mnt/default/ft-stage2-gpt-neo-GithubCodeDocStep1n2Filtered-Jan21-05-33-2022/checkpoint-1750
+        --data-path /mnt/default/data/GithubCodeDocStep1n2Filtered.test.jsonl 
+        --save-dir /mnt/default/eval_results/on_3k_testset/
+        --max-new-token 512
+        --batch-size 6
+  - name: eval_v1_gpt-neo-27
+    sku: 32G4
+    command:
+      - >
+        python eval-gpt-neo.py
+        --model-path EleutherAI/gpt-neo-2.7B
+        --data-path /mnt/default/data/GithubCodeDocStep1n2Filtered.test.jsonl 
+        --save-dir /mnt/default/eval_results/on_3k_testset/
+        --max-new-token 512 
+        --batch-size 3
+  - name: eval_v1_ft1_gpt-neo-27
+    sku: 32G4
+    command:
+      - >
+        python eval-gpt-neo.py
+        --model-path /mnt/default/ft-stage1-gpt-neo-27-GithubCodeDoc-Jan17-05-10-2022/checkpoint-55000
+        --data-path /mnt/default/data/GithubCodeDocStep1n2Filtered.test.jsonl 
+        --save-dir /mnt/default/eval_results/on_3k_testset/
+        --max-new-token 512
+        --batch-size 3
+  - name: eval_v1_ft2_gpt-neo-27
+    sku: 32G4
+    command:
+      - >
+        python eval-gpt-neo.py
+        --model-path /mnt/default/ft-stage1-gpt-neo-27-GithubCodeDocStep1n2Filtered-Jan22-02-47-2022/checkpoint-9500
+        --data-path /mnt/default/data/GithubCodeDocStep1n2Filtered.test.jsonl 
+        --save-dir /mnt/default/eval_results/on_3k_testset/
+        --max-new-token 512
+        --batch-size 3
+  - name: eval_v1_ft12_gpt-neo-27
+    sku: 32G4
+    command:
+      - >
+        python eval-gpt-neo.py
+        --model-path /mnt/default/ft-stage2-gpt-neo-27-GithubCodeDocStep1n2Filtered-Jan23-04-41-2022/checkpoint-4500
+        --data-path /mnt/default/data/GithubCodeDocStep1n2Filtered.test.jsonl 
+        --save-dir /mnt/default/eval_results/on_3k_testset/
+        --max-new-token 512
+        --batch-size 3
+  #
+  # jobs for evaluaiton on holdout data
+  - name: eval_gpt2
+    sku: G1
+    command:
+      - >
+        python eval-gpt-neo.py 
+        --model-path gpt2 
+        --data-path /mnt/default/data/GithubCodeDocStep1n2Filtered.holdout.jsonl 
+        --save-dir /mnt/default/eval_results/holdout_test/
+        --max-new-token 256
+        --batch-size 64
+  - name: eval_ft12_gpt2
+    sku: G1
+    command:
+      - >
+        python eval-gpt-neo.py 
+        --model-path /mnt/default/ft-stage2-gpt2-GithubCodeDocStep1n2Filtered-Jan21-13-24-2022/checkpoint-14750 
+        --data-path /mnt/default/data/GithubCodeDocStep1n2Filtered.holdout.jsonl 
+        --save-dir /mnt/default/eval_results/holdout_test/
+        --max-new-token 256
+        --batch-size 32
+  - name: eval_ft1_gpt2
+    sku: G1
+    command:
+      - >
+        python eval-gpt-neo.py 
+        --model-path /mnt/default/ft-stage1-gpt2-GithubCodeDoc-Jan21-07-58-2022/checkpoint-157500 
+        --data-path /mnt/default/data/GithubCodeDocStep1n2Filtered.holdout.jsonl 
+        --save-dir /mnt/default/eval_results/holdout_test/
+        --max-new-token 256 
+        --batch-size 32
+  - name: eval_ft2_gpt2
+    sku: G1
+    command:
+      - >
+        python eval-gpt-neo.py 
+        --model-path /mnt/default/ft-stage1-gpt2-GithubCodeDocStep1n2Filtered-Jan21-00-31-2022/checkpoint-14750 
+        --data-path /mnt/default/data/GithubCodeDocStep1n2Filtered.holdout.jsonl 
+        --save-dir /mnt/default/eval_results/holdout_test/
+        --max-new-token 256 
+        --batch-size 32
+  - name: eval_gpt-neo
+    sku: 32G4
+    command:
+      - >
+        python eval-gpt-neo.py
+        --model-path EleutherAI/gpt-neo-1.3B
+        --data-path /mnt/default/data/GithubCodeDocStep1n2Filtered.holdout.jsonl 
+        --save-dir /mnt/default/eval_results/holdout_test/
+        --max-new-token 512 
+        --batch-size 6
+  - name: eval_ft1_gpt-neo
+    sku: 32G4
+    command:
+      - >
+        python eval-gpt-neo.py
+        --model-path /mnt/default/ft-stage1-gpt-neo-GithubCodeDoc-Jan16-16-49-2022/checkpoint-80000
+        --data-path /mnt/default/data/GithubCodeDocStep1n2Filtered.holdout.jsonl 
+        --save-dir /mnt/default/eval_results/holdout_test/
+        --max-new-token 512 
+        --batch-size 6
+  - name: eval_ft2_gpt-neo
+    sku: 32G4
+    command:
+      - >
+        python eval-gpt-neo.py
+        --model-path /mnt/default/ft-stage1-gpt-neo-GithubCodeDocStep1n2Filtered-Jan20-07-50-2022/checkpoint-4750
+        --data-path /mnt/default/data/GithubCodeDocStep1n2Filtered.holdout.jsonl 
+        --save-dir /mnt/default/eval_results/holdout_test/
+        --max-new-token 512 
+        --batch-size 6
+  - name: eval_ft12_gpt-neo
+    sku: 32G4
+    command:
+      - >
+        python eval-gpt-neo.py
+        --model-path /mnt/default/ft-stage2-gpt-neo-GithubCodeDocStep1n2Filtered-Jan21-05-33-2022/checkpoint-1750
+        --data-path /mnt/default/data/GithubCodeDocStep1n2Filtered.holdout.jsonl 
+        --save-dir /mnt/default/eval_results/holdout_test/
+        --max-new-token 512
+        --batch-size 6
+  - name: eval_gpt-neo-27
+    sku: 32G4
+    command:
+      - >
+        python eval-gpt-neo.py
+        --model-path EleutherAI/gpt-neo-2.7B
+        --data-path /mnt/default/data/GithubCodeDocStep1n2Filtered.holdout.jsonl 
+        --save-dir /mnt/default/eval_results/holdout_test/
+        --max-new-token 512 
+        --batch-size 3
+  - name: eval_ft1_gpt-neo-27
+    sku: 32G4
+    command:
+      - >
+        python eval-gpt-neo.py
+        --model-path /mnt/default/ft-stage1-gpt-neo-27-GithubCodeDoc-Jan17-05-10-2022/checkpoint-55000
+        --data-path /mnt/default/data/GithubCodeDocStep1n2Filtered.holdout.jsonl 
+        --save-dir /mnt/default/eval_results/holdout_test/
+        --max-new-token 512 
+        --batch-size 3
+  - name: eval_ft2_gpt-neo-27
+    sku: 32G4
+    command:
+      - >
+        python eval-gpt-neo.py
+        --model-path /mnt/default/ft-stage1-gpt-neo-27-GithubCodeDocStep1n2Filtered-Jan22-02-47-2022/checkpoint-9500
+        --data-path /mnt/default/data/GithubCodeDocStep1n2Filtered.holdout.jsonl 
+        --save-dir /mnt/default/eval_results/holdout_test/
+        --max-new-token 512 
+        --batch-size 3
+  - name: eval_ft12_gpt-neo-27
+    sku: 32G4
+    command:
+      - >
+        python eval-gpt-neo.py
+        --model-path /mnt/default/ft-stage2-gpt-neo-27-GithubCodeDocStep1n2Filtered-Jan23-04-41-2022/checkpoint-4500
+        --data-path /mnt/default/data/GithubCodeDocStep1n2Filtered.holdout.jsonl 
+        --save-dir /mnt/default/eval_results/holdout_test/
+        --max-new-token 512 
+        --batch-size 3
+  #
+  - name: stage1_finetune_gpt-j_2xG4
+    sku: 2x32G4
+    aml_mpirun:
+      process_count_per_node: 1
+      communicator: "OpenMpi"
+    command:
+      - >
+        bash finetune-gpt-neo_cli.sh -j ft-stage1-gpt-j
+        -m "EleutherAI/gpt-j-6B" -s 2048 16
+  - name: stage1_finetune_gpt-j_2xG4_nompi
+    sku: 2x32G4
+    aml_mpirun:
+      process_count_per_node: 0
+      communicator: "OpenMpi"
+    command:
+      - >
+        bash finetune-gpt-neo_cli.sh -j ft-stage1-gpt-j
+        -m "EleutherAI/gpt-j-6B" -s 2048 16
+
+# - name: csharp_dist
+#   sku: G4
+#   sku_count: 16
+#   aml_mpirun:
+#     process_count_per_node: 1
+#     communicator: "OpenMpi"
+#   command:
+#   - bash run.sh 16

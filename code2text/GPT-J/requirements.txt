@@ -1,0 +1,12 @@
+accelerate
+# torch >= 1.6
+transformers == 4.15.0
+datasets >= 1.17.0
+sentencepiece != 0.1.92
+deepspeed
+# mpi4py
+protobuf
+pandas
+wandb
+tensorboard
+tensorboardX
