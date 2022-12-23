@@ -22,4 +22,21 @@ direnv allow .
 - [ ] Annotation guideline
 - [ ] Human evaluation guideline
 - [ ] Finetune and inference scripts
-- [ ] Citation info
+- [x] Citation info
+
+# Citation
+
+Please cite the following paper if you use this dataset in your work:
+
+```bibtex
+@misc{https://doi.org/10.48550/arxiv.2211.15395,
+  doi = {10.48550/ARXIV.2211.15395},
+  url = {https://arxiv.org/abs/2211.15395},
+  author = {Cui, Haotian and Wang, Chenglong and Huang, Junjie and Inala, Jeevana Priya and Mytkowicz, Todd and Wang, Bo and Gao, Jianfeng and Duan, Nan},
+  keywords = {Computation and Language (cs.CL), Machine Learning (cs.LG), FOS: Computer and information sciences, FOS: Computer and information sciences, I.2.2; I.2.7},
+  title = {CodeExp: Explanatory Code Document Generation},
+  publisher = {arXiv},
+  year = {2022}
+}
+
+```
